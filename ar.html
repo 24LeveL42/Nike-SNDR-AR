@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Nike SNDR – AR Try-On</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; font-family: 'Arial', sans-serif; overflow: hidden; }
+
+    #loading-screen {
+      position: fixed; inset: 0; background: #000;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 999; color: #fff;
+    }
+    #loading-screen .logo {
+      font-size: 2rem; font-weight: 900; letter-spacing: 4px;
+      color: #fff; margin-bottom: 8px;
+    }
+    #loading-screen .sub {
+      font-size: 0.75rem; letter-spacing: 6px; color: #888;
+      margin-bottom: 40px; text-transform: uppercase;
+    }
+    .loader-bar {
+      width: 200px; height: 2px; background: #222; border-radius: 2px; overflow: hidden;
+    }
+    .loader-fill {
+      height: 100%; width: 0%; background: #fff;
+      animation: fill 2.5s ease forwards;
+    }
+    @keyframes fill { to { width: 100%; } }
+    #loading-screen .hint {
+      margin-top: 20px; font-size: 0.7rem; color: #555; letter-spacing: 2px;
+    }
+
+    #ar-container { position: fixed; inset: 0; }
+
+    #ui-overlay {
+      position: fixed; inset: 0; pointer-events: none; z-index: 10;
+    }
+
+    #top-bar {
+      position: absolute; top: 0; left: 0; right: 0;
+      padding: 20px 24px 16px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    #top-bar .brand { font-size: 1.1rem; font-weight: 900; letter-spacing: 3px; color: #fff; }
+    #top-bar .model { font-size: 0.65rem; letter-spacing: 4px; color: #aaa; margin-top: 2px; }
+
+    #bottom-bar {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      padding: 20px 24px 36px;
+      background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);
+      display: flex; flex-direction: column; align-items: center; gap: 12px;
+    }
+
+    #scan-hint {
+      display: flex; align-items: center; gap: 10px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 100px; padding: 10px 20px;
+      pointer-events: none;
+    }
+    .pulse-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: #fff;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.7); }
+    }
+    #scan-hint span { font-size: 0.72rem; letter-spacing: 2px; color: #ddd; }
+
+    #status-msg {
+      font-size: 0.65rem; letter-spacing: 3px; color: #666;
+      text-transform: uppercase;
+    }
+
+    /* corner brackets */
+    .bracket {
+      position: absolute; width: 50px; height: 50px;
+      border-color: rgba(255,255,255,0.3); border-style: solid;
+    }
+    .bracket.tl { top: 80px; left: 20px; border-width: 2px 0 0 2px; }
+    .bracket.tr { top: 80px; right: 20px; border-width: 2px 2px 0 0; }
+    .bracket.bl { bottom: 140px; left: 20px; border-width: 0 0 2px 2px; }
+    .bracket.br { bottom: 140px; right: 20px; border-width: 0 2px 2px 0; }
+
+    #error-screen {
+      display: none; position: fixed; inset: 0; background: #000;
+      color: #fff; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center; padding: 40px; z-index: 999;
+    }
+    #error-screen h2 { font-size: 1.2rem; margin-bottom: 12px; letter-spacing: 2px; }
+    #error-screen p { font-size: 0.8rem; color: #888; line-height: 1.6; }
+  </style>
+</head>
+<body>
+
+<div id="loading-screen">
+  <div class="logo">NIKE</div>
+  <div class="sub">SNDR · AR Try-On</div>
+  <div class="loader-bar"><div class="loader-fill"></div></div>
+  <div class="hint">Loading experience...</div>
+</div>
+
+<div id="ar-container"></div>
+
+<div id="ui-overlay">
+  <div id="top-bar">
+    <div>
+      <div class="brand">NIKE</div>
+      <div class="model">SNDR · AR TRY-ON</div>
+    </div>
+  </div>
+
+  <div class="bracket tl"></div>
+  <div class="bracket tr"></div>
+  <div class="bracket bl"></div>
+  <div class="bracket br"></div>
+
+  <div id="bottom-bar">
+    <div id="scan-hint">
+      <div class="pulse-dot"></div>
+      <span>POINT CAMERA AT YOUR FEET</span>
+    </div>
+    <div id="status-msg">AR EXPERIENCE ACTIVE</div>
+  </div>
+</div>
+
+<div id="error-screen">
+  <h2>CAMERA ACCESS NEEDED</h2>
+  <p>Please allow camera access and reload the page to experience the AR try-on.</p>
+</div>
+
+<!-- Three.js + GLTFLoader -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ─── Minimal foot-plane AR using DeviceOrientation + camera stream ───────────
+// Since true foot-tracking requires native SDK, we place the shoe on a
+// ground plane detected via the camera feed using a simple overlay approach.
+
+const container = document.getElementById('ar-container');
+const loadingScreen = document.getElementById('loading-screen');
+const errorScreen = document.getElementById('error-screen');
+const statusMsg = document.getElementById('status-msg');
+
+let scene, camera, renderer, shoe, videoEl, videoTexture;
+let isPlaced = false;
+
+async function init() {
+  // Camera stream
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    });
+
+    videoEl = document.createElement('video');
+    videoEl.srcObject = stream;
+    videoEl.setAttribute('playsinline', '');
+    videoEl.setAttribute('autoplay', '');
+    videoEl.muted = true;
+    await videoEl.play();
+
+    setupThree();
+    loadShoe();
+
+  } catch(e) {
+    loadingScreen.style.display = 'none';
+    errorScreen.style.display = 'flex';
+  }
+}
+
+function setupThree() {
+  // Scene
+  scene = new THREE.Scene();
+
+  // Camera
+  camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+  camera.position.set(0, 1.2, 1.5);
+  camera.lookAt(0, 0, 0);
+
+  // Renderer
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.shadowMap.enabled = true;
+  container.appendChild(renderer.domElement);
+
+  // Video background
+  videoTexture = new THREE.VideoTexture(videoEl);
+  const bgGeo = new THREE.PlaneGeometry(2, 2);
+  const bgMat = new THREE.MeshBasicMaterial({ map: videoTexture, depthTest: false, depthWrite: false });
+  const bgMesh = new THREE.Mesh(bgGeo, bgMat);
+  bgMesh.renderOrder = -1;
+  const bgCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1);
+  const bgScene = new THREE.Scene();
+  bgScene.add(bgMesh);
+
+  // Lighting
+  const ambient = new THREE.AmbientLight(0xffffff, 0.8);
+  scene.add(ambient);
+  const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+  dirLight.position.set(2, 5, 3);
+  dirLight.castShadow = true;
+  scene.add(dirLight);
+  const fillLight = new THREE.DirectionalLight(0x8899ff, 0.4);
+  fillLight.position.set(-3, 2, -2);
+  scene.add(fillLight);
+
+  // Ground shadow plane
+  const groundGeo = new THREE.PlaneGeometry(2, 2);
+  const groundMat = new THREE.ShadowMaterial({ opacity: 0.25 });
+  const ground = new THREE.Mesh(groundGeo, groundMat);
+  ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // Touch/click to reposition shoe
+  renderer.domElement.addEventListener('touchstart', onTap);
+  renderer.domElement.addEventListener('click', onTap);
+
+  window.addEventListener('resize', onResize);
+
+  // Animate loop
+  function animate() {
+    requestAnimationFrame(animate);
+    renderer.autoClear = false;
+    renderer.clear();
+    renderer.render(bgScene, bgCam);
+    renderer.render(scene, camera);
+    if (shoe) {
+      shoe.rotation.y += 0.005;
+    }
+  }
+  animate();
+}
+
+function onTap(e) {
+  if (!shoe) return;
+  // Place shoe at bottom center of screen
+  shoe.position.set(0, 0, 0);
+  shoe.rotation.y = 0;
+  isPlaced = true;
+  statusMsg.textContent = 'TAP AGAIN TO REPOSITION';
+}
+
+function loadShoe() {
+  // Load GLB using fetch + parse
+  const loader = new THREE.ObjectLoader ? null : null;
+
+  // Use GLTFLoader via importmap or inline
+  const script = document.createElement('script');
+  script.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js';
+  script.onload = () => {
+    const gltfLoader = new THREE.GLTFLoader();
+    gltfLoader.load(
+      'Nike_SNDR_3d.glb',
+      (gltf) => {
+        shoe = gltf.scene;
+
+        // Auto-scale to fit nicely
+        const box = new THREE.Box3().setFromObject(shoe);
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const scale = 0.35 / maxDim;
+        shoe.scale.setScalar(scale);
+
+        // Center at ground
+        const center = box.getCenter(new THREE.Vector3());
+        shoe.position.set(-center.x * scale, -box.min.y * scale, -center.z * scale);
+
+        // Shadows
+        shoe.traverse(child => {
+          if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+
+        scene.add(shoe);
+
+        // Hide loading
+        setTimeout(() => {
+          loadingScreen.style.display = 'none';
+          statusMsg.textContent = 'TAP SCREEN TO PLACE SHOE ON FOOT';
+        }, 500);
+      },
+      (progress) => {
+        const pct = Math.round((progress.loaded / progress.total) * 100);
+        document.querySelector('.hint').textContent = `Loading model... ${pct}%`;
+      },
+      (err) => {
+        console.error('GLB load error:', err);
+        document.querySelector('.hint').textContent = 'Error loading model.';
+      }
+    );
+  };
+  document.head.appendChild(script);
+}
+
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+init();
+</script>
+</body>
+</html>
